@@ -64,6 +64,7 @@ type Worker struct {
 	Cert                 []byte
 	Key                  []byte
 	PauseBetweenMessages time.Duration
+	IsPublisher          bool
 }
 
 func setSkipTLS(o *mqtt.ClientOptions) {
@@ -184,36 +185,40 @@ func (w *Worker) Run(ctx context.Context) {
 		return
 	}
 
-	publisher := mqtt.NewClient(publisherOptions)
-	verboseLogger.Printf("[%d] connecting publisher\n", w.WorkerId)
-	if token := publisher.Connect(); token.WaitTimeout(w.Timeout) && token.Error() != nil {
-		resultChan <- Result{
-			WorkerId:     w.WorkerId,
-			Event:        ConnectFailedEvent,
-			Error:        true,
-			ErrorMessage: token.Error(),
-		}
-		return
-	}
-
-	verboseLogger.Printf("[%d] starting control loop %s\n", w.WorkerId, topicName)
-
 	stopWorker := false
 	receivedCount := 0
 	publishedCount := 0
-
 	t0 := time.Now()
-	for i := 0; i < w.NumberOfMessages; i++ {
-		text := w.PayloadGenerator(i)
-		token := publisher.Publish(topicName, w.PublisherQoS, w.Retained, text)
-		publishedCount++
-		token.WaitTimeout(w.Timeout)
-		time.Sleep(w.PauseBetweenMessages)
-	}
-	publisher.Disconnect(5)
-
 	publishTime := time.Since(t0)
-	verboseLogger.Printf("[%d] all messages published\n", w.WorkerId)
+
+	if *argNumPublishers == 0 || w.IsPublisher {
+		publisher := mqtt.NewClient(publisherOptions)
+		verboseLogger.Printf("[%d] connecting publisher\n", w.WorkerId)
+		if token := publisher.Connect(); token.WaitTimeout(w.Timeout) && token.Error() != nil {
+			resultChan <- Result{
+				WorkerId:     w.WorkerId,
+				Event:        ConnectFailedEvent,
+				Error:        true,
+				ErrorMessage: token.Error(),
+			}
+			return
+		}
+
+		verboseLogger.Printf("[%d] starting control loop %s\n", w.WorkerId, topicName)
+
+		t0 = time.Now()
+		for i := 0; i < w.NumberOfMessages; i++ {
+			text := w.PayloadGenerator(i)
+			token := publisher.Publish(topicName, w.PublisherQoS, w.Retained, text)
+			publishedCount++
+			token.WaitTimeout(w.Timeout)
+			time.Sleep(w.PauseBetweenMessages)
+		}
+		publisher.Disconnect(5)
+
+		publishTime = time.Since(t0)
+		verboseLogger.Printf("[%d] all messages published\n", w.WorkerId)
+	}
 
 	t0 = time.Now()
 	for receivedCount < w.NumberOfMessages && !stopWorker {
