@@ -149,40 +149,43 @@ func (w *Worker) Run(ctx context.Context) {
 		setSkipTLS(subscriberOptions)
 	}
 
-	subscriber := mqtt.NewClient(subscriberOptions)
+	if *argNumPublishers == 0 || !w.IsPublisher {
 
-	verboseLogger.Printf("[%d] connecting subscriber\n", w.WorkerId)
-	if token := subscriber.Connect(); token.WaitTimeout(w.Timeout) && token.Error() != nil {
-		resultChan <- Result{
-			WorkerId:     w.WorkerId,
-			Event:        ConnectFailedEvent,
-			Error:        true,
-			ErrorMessage: token.Error(),
+		subscriber := mqtt.NewClient(subscriberOptions)
+
+		verboseLogger.Printf("[%d] connecting subscriber\n", w.WorkerId)
+		if token := subscriber.Connect(); token.WaitTimeout(w.Timeout) && token.Error() != nil {
+			resultChan <- Result{
+				WorkerId:     w.WorkerId,
+				Event:        ConnectFailedEvent,
+				Error:        true,
+				ErrorMessage: token.Error(),
+			}
+
+			return
 		}
 
-		return
-	}
+		defer func() {
+			verboseLogger.Printf("[%d] unsubscribe\n", w.WorkerId)
 
-	defer func() {
-		verboseLogger.Printf("[%d] unsubscribe\n", w.WorkerId)
+			if token := subscriber.Unsubscribe(topicName); token.WaitTimeout(w.Timeout) && token.Error() != nil {
+				fmt.Printf("failed to unsubscribe: %v\n", token.Error())
+			}
 
-		if token := subscriber.Unsubscribe(topicName); token.WaitTimeout(w.Timeout) && token.Error() != nil {
-			fmt.Printf("failed to unsubscribe: %v\n", token.Error())
+			subscriber.Disconnect(5)
+		}()
+
+		verboseLogger.Printf("[%d] subscribing to topic\n", w.WorkerId)
+		if token := subscriber.Subscribe(topicName, w.SubscriberQoS, nil); token.WaitTimeout(w.Timeout) && token.Error() != nil {
+			resultChan <- Result{
+				WorkerId:     w.WorkerId,
+				Event:        SubscribeFailedEvent,
+				Error:        true,
+				ErrorMessage: token.Error(),
+			}
+
+			return
 		}
-
-		subscriber.Disconnect(5)
-	}()
-
-	verboseLogger.Printf("[%d] subscribing to topic\n", w.WorkerId)
-	if token := subscriber.Subscribe(topicName, w.SubscriberQoS, nil); token.WaitTimeout(w.Timeout) && token.Error() != nil {
-		resultChan <- Result{
-			WorkerId:     w.WorkerId,
-			Event:        SubscribeFailedEvent,
-			Error:        true,
-			ErrorMessage: token.Error(),
-		}
-
-		return
 	}
 
 	stopWorker := false
@@ -220,53 +223,55 @@ func (w *Worker) Run(ctx context.Context) {
 		verboseLogger.Printf("[%d] all messages published\n", w.WorkerId)
 	}
 
-	t0 = time.Now()
-	for receivedCount < w.NumberOfMessages && !stopWorker {
-		select {
-		case <-queue:
-			receivedCount++
+	if *argNumPublishers == 0 || !w.IsPublisher {
+		t0 = time.Now()
+		for receivedCount < w.NumberOfMessages && !stopWorker {
+			select {
+			case <-queue:
+				receivedCount++
 
-			verboseLogger.Printf("[%d] %d/%d received\n", w.WorkerId, receivedCount, w.NumberOfMessages)
-			if receivedCount == w.NumberOfMessages {
+				verboseLogger.Printf("[%d] %d/%d received\n", w.WorkerId, receivedCount, w.NumberOfMessages)
+				if receivedCount == w.NumberOfMessages {
+					resultChan <- Result{
+						WorkerId:          w.WorkerId,
+						Event:             CompletedEvent,
+						PublishTime:       publishTime,
+						ReceiveTime:       time.Since(t0),
+						MessagesReceived:  receivedCount,
+						MessagesPublished: publishedCount,
+					}
+				} else {
+					resultChan <- Result{
+						WorkerId:          w.WorkerId,
+						Event:             ProgressReportEvent,
+						PublishTime:       publishTime,
+						ReceiveTime:       time.Since(t0),
+						MessagesReceived:  receivedCount,
+						MessagesPublished: publishedCount,
+					}
+				}
+			case <-ctx.Done():
+				var event string
+				var isError bool
+				switch ctx.Err().(type) {
+				case TimeoutError:
+					verboseLogger.Printf("[%d] received abort signal due to test timeout", w.WorkerId)
+					event = TimeoutExceededEvent
+					isError = true
+				default:
+					verboseLogger.Printf("[%d] received abort signal", w.WorkerId)
+					event = AbortedEvent
+					isError = false
+				}
+				stopWorker = true
 				resultChan <- Result{
 					WorkerId:          w.WorkerId,
-					Event:             CompletedEvent,
+					Event:             event,
 					PublishTime:       publishTime,
-					ReceiveTime:       time.Since(t0),
 					MessagesReceived:  receivedCount,
 					MessagesPublished: publishedCount,
+					Error:             isError,
 				}
-			} else {
-				resultChan <- Result{
-					WorkerId:          w.WorkerId,
-					Event:             ProgressReportEvent,
-					PublishTime:       publishTime,
-					ReceiveTime:       time.Since(t0),
-					MessagesReceived:  receivedCount,
-					MessagesPublished: publishedCount,
-				}
-			}
-		case <-ctx.Done():
-			var event string
-			var isError bool
-			switch ctx.Err().(type) {
-			case TimeoutError:
-				verboseLogger.Printf("[%d] received abort signal due to test timeout", w.WorkerId)
-				event = TimeoutExceededEvent
-				isError = true
-			default:
-				verboseLogger.Printf("[%d] received abort signal", w.WorkerId)
-				event = AbortedEvent
-				isError = false
-			}
-			stopWorker = true
-			resultChan <- Result{
-				WorkerId:          w.WorkerId,
-				Event:             event,
-				PublishTime:       publishTime,
-				MessagesReceived:  receivedCount,
-				MessagesPublished: publishedCount,
-				Error:             isError,
 			}
 		}
 	}

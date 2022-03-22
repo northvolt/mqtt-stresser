@@ -309,6 +309,8 @@ func main() {
 			PauseBetweenMessages: pauseBetweenMessages,
 			IsPublisher:          true,
 		}).Run(testCtx)
+
+		fmt.Printf("%d publisher started\n", *argNumPublishers)
 	}
 
 	finEvents := 0
