@@ -13,17 +13,17 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-type PayloadGenerator func(i int) string
+type PayloadGenerator func(i int) []byte
 
 func defaultPayloadGen() PayloadGenerator {
-	return func(i int) string {
-		return fmt.Sprintf("this is msg #%d!", i)
+	return func(i int) []byte {
+		return []byte(fmt.Sprintf("this is msg #%d!", i))
 	}
 }
 
 func constantPayloadGenerator(payload string) PayloadGenerator {
-	return func(i int) string {
-		return payload
+	return func(i int) []byte {
+		return []byte(payload)
 	}
 }
 
@@ -34,8 +34,8 @@ func filePayloadGenerator(filepath string) PayloadGenerator {
 		fmt.Printf("error reading payload file: %v\n", err)
 		os.Exit(1)
 	}
-	return func(i int) string {
-		return string(content)
+	return func(i int) []byte {
+		return []byte(content)
 	}
 }
 
