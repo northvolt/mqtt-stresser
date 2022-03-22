@@ -21,21 +21,30 @@ func defaultPayloadGen() PayloadGenerator {
 	}
 }
 
+var constantPayloadData []byte
+
 func constantPayloadGenerator(payload string) PayloadGenerator {
+	if len(constantPayloadData) == 0 {
+		constantPayloadData = []byte(payload)
+	}
+
 	return func(i int) []byte {
-		return []byte(payload)
+		return constantPayloadData
 	}
 }
 
 func filePayloadGenerator(filepath string) PayloadGenerator {
-	inputPath := strings.Replace(filepath, "@", "", 1)
-	content, err := ioutil.ReadFile(inputPath)
-	if err != nil {
-		fmt.Printf("error reading payload file: %v\n", err)
-		os.Exit(1)
+	var err error
+	if len(constantPayloadData) == 0 {
+		inputPath := strings.Replace(filepath, "@", "", 1)
+		constantPayloadData, err = ioutil.ReadFile(inputPath)
+		if err != nil {
+			fmt.Printf("error reading payload file: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	return func(i int) []byte {
-		return []byte(content)
+		return constantPayloadData
 	}
 }
 
